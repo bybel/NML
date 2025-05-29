@@ -664,6 +664,7 @@ train_losses, val_losses, val_accuracies, model = train_gat_model(
 # Evaluate on test set
 print("\nEvaluating on test set...")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
 model = model.to(device)
 model.eval()
 
@@ -762,9 +763,27 @@ full_data_list = prepare_data_from_segments(
 
 print(f"\nTotal samples prepared: {len(full_data_list)}")
 
-# Split and train on full dataset
-train_data_full, test_data_full = train_test_split(full_data_list, test_size=0.2, random_state=42)
-train_data_full, val_data_full = train_test_split(train_data_full, test_size=0.2, random_state=42)
+# Split and train on full dataset with proper stratification
+all_labels_full = [d.y.item() for d in full_data_list]
+train_data_full, test_data_full = train_test_split(
+    full_data_list, 
+    test_size=0.2, 
+    random_state=42, 
+    stratify=all_labels_full
+)
+
+train_labels_for_val_split = [d.y.item() for d in train_data_full]
+train_data_full, val_data_full = train_test_split(
+    train_data_full, 
+    test_size=0.2, 
+    random_state=42, 
+    stratify=train_labels_for_val_split
+)
+
+print(f"\nFull dataset splits:")
+print(f"Train: {len(train_data_full)}")
+print(f"Validation: {len(val_data_full)}")
+print(f"Test: {len(test_data_full)}")
 
 # Create new data loaders
 train_loader_full = DataLoader(train_data_full, batch_size=64, shuffle=True)
@@ -774,13 +793,130 @@ test_loader_full = DataLoader(test_data_full, batch_size=64, shuffle=False)
 # Initialize new model for full training
 model_full = EEGGraphAttentionNetwork(
     num_features=num_features,
-    hidden_dim=128,  # Larger model for full dataset
+    hidden_dim=128,
     num_heads=8,
     num_classes=2,
     dropout=0.3
 )
 
+print(f"\nFull model parameters: {sum(p.numel() for p in model_full.parameters()):,}")
+
 # Train on full dataset
+print("\nTraining on full dataset...")
 train_losses_full, val_losses_full, val_accuracies_full, model_full = train_gat_model(
     model_full, train_loader_full, val_loader_full, num_epochs=100, lr=0.001, patience=15
 )
+
+# PROPER EVALUATION ON FULL TEST SET
+print("\n" + "="*50)
+print("FINAL EVALUATION ON FULL TEST SET")
+print("="*50)
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model_full = model_full.to(device)
+model_full.eval()
+
+test_preds = []
+test_labels = []
+test_probs = []
+
+with torch.no_grad():
+    for batch in tqdm(test_loader_full, desc="Final Testing"):
+        batch = batch.to(device)
+        out = model_full(batch.x, batch.edge_index, batch.batch)
+        probs = F.softmax(out, dim=1)
+        pred = out.argmax(dim=1)
+        
+        test_preds.extend(pred.cpu().numpy())
+        test_labels.extend(batch.y.cpu().numpy())
+        test_probs.extend(probs[:, 1].cpu().numpy())
+
+# Calculate final metrics
+accuracy = accuracy_score(test_labels, test_preds)
+precision, recall, f1, _ = precision_recall_fscore_support(test_labels, test_preds, average='binary')
+cm = confusion_matrix(test_labels, test_preds)
+
+# Calculate AUC only if both classes are present
+if len(np.unique(test_labels)) > 1:
+    auc = roc_auc_score(test_labels, test_probs)
+else:
+    auc = np.nan
+
+print(f"\nFinal Test Results (Full Dataset):")
+print(f"Total test samples: {len(test_labels)}")
+print(f"Accuracy: {accuracy:.4f}")
+print(f"Precision: {precision:.4f}")
+print(f"Recall: {recall:.4f}")
+print(f"F1-Score: {f1:.4f}")
+if not np.isnan(auc):
+    print(f"AUC: {auc:.4f}")
+else:
+    print(f"AUC: N/A (single class in test set)")
+
+# Detailed breakdown
+print(f"\nDetailed Results:")
+print(f"True Positives: {cm[1,1]}")
+print(f"False Positives: {cm[0,1]}")
+print(f"True Negatives: {cm[0,0]}")
+print(f"False Negatives: {cm[1,0]}")
+
+# Class distribution
+test_class_dist = np.bincount(test_labels)
+pred_class_dist = np.bincount(test_preds)
+print(f"\nClass distribution in test set:")
+print(f"Actual - Class 0: {test_class_dist[0]}, Class 1: {test_class_dist[1]}")
+print(f"Predicted - Class 0: {pred_class_dist[0]}, Class 1: {pred_class_dist[1]}")
+
+# Use the training history from full training for visualizations
+train_losses = train_losses_full
+val_losses = val_losses_full
+val_accuracies = val_accuracies_full
+
+# Visualizations
+fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+
+# Training history
+axes[0, 0].plot(train_losses, label='Train Loss', linewidth=2)
+axes[0, 0].plot(val_losses, label='Val Loss', linewidth=2)
+axes[0, 0].set_xlabel('Epoch')
+axes[0, 0].set_ylabel('Loss')
+axes[0, 0].set_title('Training and Validation Loss (Full Dataset)')
+axes[0, 0].legend()
+axes[0, 0].grid(True)
+
+axes[0, 1].plot(val_accuracies, linewidth=2, color='green')
+axes[0, 1].set_xlabel('Epoch')
+axes[0, 1].set_ylabel('Accuracy')
+axes[0, 1].set_title('Validation Accuracy (Full Dataset)')
+axes[0, 1].grid(True)
+
+# Confusion Matrix
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[1, 0])
+axes[1, 0].set_xlabel('Predicted')
+axes[1, 0].set_ylabel('True')
+axes[1, 0].set_title(f'Confusion Matrix\nAccuracy: {accuracy:.3f}')
+
+# ROC Curve
+from sklearn.metrics import roc_curve
+if len(np.unique(test_labels)) > 1:
+    fpr, tpr, _ = roc_curve(test_labels, test_probs)
+    axes[1, 1].plot(fpr, tpr, label=f'AUC = {auc:.3f}', linewidth=2)
+    axes[1, 1].plot([0, 1], [0, 1], 'k--', alpha=0.5)
+    axes[1, 1].set_xlabel('False Positive Rate')
+    axes[1, 1].set_ylabel('True Positive Rate')
+    axes[1, 1].set_title('ROC Curve')
+    axes[1, 1].legend()
+    axes[1, 1].grid(True)
+else:
+    axes[1, 1].text(0.5, 0.5, 'ROC Curve not available\n(single class in test set)', 
+                    ha='center', va='center', transform=axes[1, 1].transAxes, fontsize=12)
+    axes[1, 1].set_title('ROC Curve')
+    axes[1, 1].set_xlim([0, 1])
+    axes[1, 1].set_ylim([0, 1])
+
+plt.tight_layout()
+plt.savefig('gat_full_results.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+print("\nTraining complete! Results saved to 'gat_full_results.png'")
+print("Model weights saved to 'best_gat_model.pth'")
