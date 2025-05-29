@@ -793,10 +793,10 @@ test_loader_full = DataLoader(test_data_full, batch_size=64, shuffle=False)
 # Initialize new model for full training
 model_full = EEGGraphAttentionNetwork(
     num_features=num_features,
-    hidden_dim=128,
-    num_heads=8,
+    hidden_dim=256,
+    num_heads=16,
     num_classes=2,
-    dropout=0.3
+    dropout=0.2
 )
 
 print(f"\nFull model parameters: {sum(p.numel() for p in model_full.parameters()):,}")
@@ -804,7 +804,7 @@ print(f"\nFull model parameters: {sum(p.numel() for p in model_full.parameters()
 # Train on full dataset
 print("\nTraining on full dataset...")
 train_losses_full, val_losses_full, val_accuracies_full, model_full = train_gat_model(
-    model_full, train_loader_full, val_loader_full, num_epochs=100, lr=0.001, patience=15
+    model_full, train_loader_full, val_loader_full, num_epochs=200, lr=0.002, patience=25
 )
 
 # PROPER EVALUATION ON FULL TEST SET
