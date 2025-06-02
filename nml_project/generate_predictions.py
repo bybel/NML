@@ -71,16 +71,17 @@ def generate_submission():
     
     print(f"Prepared {len(test_data_list)} test samples")
     
-    # Load trained model
+    # Load trained model - MATCH THE ARCHITECTURE FROM TRAINING
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     num_features = test_data_list[0].x.shape[1]
     
+    # Use the SAME architecture as the full model training
     model = EEGGraphAttentionNetwork(
         num_features=num_features,
-        hidden_dim=128,
-        num_heads=8,
+        hidden_dim=256,  # Changed from 128 to 256
+        num_heads=16,    # Changed from 8 to 16
         num_classes=2,
-        dropout=0.3
+        dropout=0.2      # Changed from 0.3 to 0.2
     )
     
     # Load weights
